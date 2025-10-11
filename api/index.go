@@ -160,6 +160,18 @@ func scanPage(ctx context.Context, title string) ([]linkResult, error) {
         log.Printf("[SCAN] [%d/%d] Checking: %s", i+1, len(out), u)
         lr := linkResult{URL: u}
 
+        // Skip live/archive checks for URLs that are already archives
+        if isArchiveURL(u) {
+            lr.LiveCode = 0
+            lr.LiveStatus = "archive URL (skipped)"
+            lr.Archived = true
+            lr.ArchiveURL = u
+            lr.ArchiveStatus = "is archive"
+            log.Printf("[SCAN] [%d/%d] Detected as archive URL, skipping checks", i+1, len(out))
+            results = append(results, lr)
+            continue
+        }
+
         code, status := checkLive(ctx, u)
         lr.LiveCode = code
         lr.LiveStatus = status
@@ -181,21 +193,31 @@ func checkLive(ctx context.Context, raw string) (int, string) {
     // Try HEAD then fallback to GET if HEAD returns 405 or fails
     status := "unknown"
     code := 0
-    client := &http.Client{Timeout: 8 * time.Second}
+    client := &http.Client{
+        Timeout: 8 * time.Second,
+        CheckRedirect: func(req *http.Request, via []*http.Request) error {
+            // Allow up to 10 redirects (default)
+            if len(via) >= 10 {
+                return http.ErrUseLastResponse
+            }
+            return nil
+        },
+    }
 
     // HEAD
     req, err := http.NewRequestWithContext(ctx, http.MethodHead, raw, nil)
     if err != nil {
         log.Printf("[LIVE] Error creating HEAD request for %s: %v", raw, err)
-        return code, status
+        return code, classifyError(err)
     }
 
     resp, err := client.Do(req)
     if err != nil {
         log.Printf("[LIVE] HEAD request failed for %s: %v", raw, err)
+        return code, classifyError(err)
     } else {
         code = resp.StatusCode
-        status = resp.Status
+        status = classifyStatus(code, resp.Status)
         resp.Body.Close()
         log.Printf("[LIVE] HEAD response for %s: %d %s", raw, code, status)
         if code != http.StatusMethodNotAllowed && code != http.StatusNotImplemented {
@@ -208,26 +230,104 @@ func checkLive(ctx context.Context, raw string) (int, string) {
     req2, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
     if err != nil {
         log.Printf("[LIVE] Error creating GET request for %s: %v", raw, err)
-        return code, status
+        return code, classifyError(err)
     }
     req2.Header.Set("Range", "bytes=0-0")
     resp2, err := client.Do(req2)
     if err != nil {
         log.Printf("[LIVE] GET request failed for %s: %v", raw, err)
-        return code, status
+        return code, classifyError(err)
     }
     code = resp2.StatusCode
-    status = resp2.Status
+    status = classifyStatus(code, resp2.Status)
     io.Copy(io.Discard, resp2.Body)
     resp2.Body.Close()
     log.Printf("[LIVE] GET response for %s: %d %s", raw, code, status)
     return code, status
 }
 
+// classifyStatus provides a human-readable interpretation of HTTP status codes
+func classifyStatus(code int, original string) string {
+    switch {
+    case code >= 200 && code < 300:
+        return "OK"  // 2xx = success
+    case code >= 300 && code < 400:
+        return original  // 3xx = redirect (followed automatically)
+    case code == 403:
+        return "403 Forbidden"  // May be alive but blocked
+    case code == 429:
+        return "429 Rate Limited"  // Alive but throttled
+    case code >= 400 && code < 500:
+        return original  // 4xx = client error (likely dead)
+    case code >= 500:
+        return original  // 5xx = server error (dead/temporary)
+    default:
+        return original
+    }
+}
+
+// classifyError provides human-readable error messages for network failures
+func classifyError(err error) string {
+    if err == nil {
+        return "unknown"
+    }
+    errStr := err.Error()
+    switch {
+    case strings.Contains(errStr, "no such host"), strings.Contains(errStr, "DNS"):
+        return "DNS lookup failed"
+    case strings.Contains(errStr, "certificate"), strings.Contains(errStr, "tls"), strings.Contains(errStr, "TLS"):
+        return "TLS/certificate error"
+    case strings.Contains(errStr, "timeout"), strings.Contains(errStr, "deadline exceeded"):
+        return "timeout"
+    case strings.Contains(errStr, "connection refused"):
+        return "connection refused"
+    case strings.Contains(errStr, "connection reset"):
+        return "connection reset"
+    default:
+        return "network error"
+    }
+}
+
+// isArchiveURL detects if a URL is already an archive URL
+func isArchiveURL(rawURL string) bool {
+    lower := strings.ToLower(rawURL)
+    archiveHosts := []string{
+        "web.archive.org",           // Internet Archive Wayback Machine
+        "archive.org/web/",          // Alternative Wayback path
+        "archive.today",             // archive.today family
+        "archive.is",
+        "archive.ph",
+        "archive.fo",
+        "archive.li",
+        "archive.md",
+        "archive.vn",
+        "webcitation.org",           // WebCite
+        "perma.cc",                  // Perma.cc
+        "archive-it.org",            // Archive-It
+        "webarchive.org.uk",         // UK Web Archive
+        "webarchive.nationalarchives.gov.uk", // UK National Archives
+        "arquivo.pt",                // Portuguese Web Archive
+        "webarchive.library.unt.edu", // UNT Web Archive
+        "webarchive.loc.gov",        // Library of Congress
+        "swap.stanford.edu",         // Stanford Web Archive Portal
+        "vefsafn.is",                // Icelandic Web Archive
+        "screenshots.com",           // Screenshots archive
+    }
+
+    for _, host := range archiveHosts {
+        if strings.Contains(lower, host) {
+            return true
+        }
+    }
+    return false
+}
+
 func checkWayback(ctx context.Context, raw string) (bool, string, string) {
     // Wayback "available" v2 API
     v := url.Values{}
     v.Set("url", raw)
+    // Only accept snapshots with good status codes (200 OK, 203 Non-Authoritative, 206 Partial Content)
+    v.Set("statuscodes", "200,203,206")
     reqURL := "https://archive.org/wayback/available?" + v.Encode()
     ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
     defer cancel()
@@ -272,12 +372,45 @@ func checkWayback(ctx context.Context, raw string) (bool, string, string) {
     }
 
     c := wb.ArchivedSnapshots.Closest
-    log.Printf("[WAYBACK] Parsed response for %s: Available=%v, URL=%s, Status=%s", raw, c.Available, c.URL, c.Status)
+    log.Printf("[WAYBACK] Parsed response for %s: Available=%v, URL=%s, Status=%s, Timestamp=%s", raw, c.Available, c.URL, c.Status, c.Timestamp)
 
     if c.Available && c.URL != "" {
+        // Validate timestamp (format: YYYYMMDDHHmmss)
+        if !isValidArchiveTimestamp(c.Timestamp) {
+            log.Printf("[WAYBACK] Invalid timestamp for %s: %s (rejected)", raw, c.Timestamp)
+            return false, "", "invalid archive timestamp"
+        }
         log.Printf("[WAYBACK] Found archive for %s: %s (status: %s)", raw, c.URL, c.Status)
         return true, c.URL, c.Status
     }
     log.Printf("[WAYBACK] No archive found for %s (Available=%v, URL empty=%v)", raw, c.Available, c.URL == "")
     return false, "", "not archived"
+}
+
+// isValidArchiveTimestamp validates Wayback Machine timestamps (format: YYYYMMDDHHmmss)
+// Rejects timestamps before 1996-03-01 (when Wayback started) or in the future
+func isValidArchiveTimestamp(timestamp string) bool {
+    if len(timestamp) != 14 {
+        return false  // Must be exactly 14 characters
+    }
+
+    // Parse timestamp: YYYYMMDDHHmmss
+    t, err := time.Parse("20060102150405", timestamp)
+    if err != nil {
+        return false  // Invalid format
+    }
+
+    // Wayback Machine started on March 1, 1996
+    waybackStart := time.Date(1996, 3, 1, 0, 0, 0, 0, time.UTC)
+    if t.Before(waybackStart) {
+        return false  // Too old
+    }
+
+    // Reject future timestamps (with 1 day buffer for timezone issues)
+    futureLimit := time.Now().UTC().Add(24 * time.Hour)
+    if t.After(futureLimit) {
+        return false  // In the future
+    }
+
+    return true
 }
