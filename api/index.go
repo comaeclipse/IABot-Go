@@ -253,6 +253,9 @@ func checkWayback(ctx context.Context, raw string) (bool, string, string) {
         return false, "", "read error"
     }
 
+    // Log the raw response for debugging
+    log.Printf("[WAYBACK] Raw API response for %s: %s", raw, string(b))
+
     var wb struct {
         ArchivedSnapshots struct {
             Closest struct {
@@ -267,11 +270,14 @@ func checkWayback(ctx context.Context, raw string) (bool, string, string) {
         log.Printf("[WAYBACK] JSON decode error for %s: %v", raw, err)
         return false, "", "decode error: " + err.Error()
     }
+
     c := wb.ArchivedSnapshots.Closest
+    log.Printf("[WAYBACK] Parsed response for %s: Available=%v, URL=%s, Status=%s", raw, c.Available, c.URL, c.Status)
+
     if c.Available && c.URL != "" {
         log.Printf("[WAYBACK] Found archive for %s: %s (status: %s)", raw, c.URL, c.Status)
         return true, c.URL, c.Status
     }
-    log.Printf("[WAYBACK] No archive found for %s", raw)
+    log.Printf("[WAYBACK] No archive found for %s (Available=%v, URL empty=%v)", raw, c.Available, c.URL == "")
     return false, "", "not archived"
 }
