@@ -33,6 +33,23 @@ type linkResult struct {
     ArchiveStatus string
 }
 
+type apiError struct {
+    msg     string
+    status  int
+    payload string
+}
+
+func (e *apiError) Error() string {
+    parts := []string{e.msg}
+    if e.status != 0 {
+        parts = append(parts, http.StatusText(e.status))
+    }
+    if e.payload != "" {
+        parts = append(parts, e.payload)
+    }
+    return strings.Join(parts, ": ")
+}
+
 // Handler serves the interface page and processes scans.
 func Handler(w http.ResponseWriter, r *http.Request) {
     t, err := template.ParseFS(tmplFS, "templates/index.html")
@@ -67,12 +84,15 @@ func scanPage(ctx context.Context, title string) ([]linkResult, error) {
     v.Set("page", title)
     v.Set("prop", "externallinks")
     v.Set("format", "json")
+    // set origin to please CORS and some edge policies; harmless for server-side
+    v.Set("origin", "*")
     reqURL := api + "?" + v.Encode()
 
     ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
     defer cancel()
 
     req, _ := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+    req.Header.Set("User-Agent", "IABot-Go/0.1 (+https://github.com/comaeclipse/IABot-Go)")
     resp, err := http.DefaultClient.Do(req)
     if err != nil {
         return nil, err
@@ -88,7 +108,10 @@ func scanPage(ctx context.Context, title string) ([]linkResult, error) {
         Error any `json:"error"`
     }
     if err := json.Unmarshal(body, &parsed); err != nil {
-        return nil, err
+        // include a snippet of the payload to aid debugging (common case: missing UA -> HTML/plaintext)
+        snippet := string(body)
+        if len(snippet) > 240 { snippet = snippet[:240] + "..." }
+        return nil, &apiError{msg: "mediawiki api decode", status: resp.StatusCode, payload: snippet}
     }
     links := parsed.Parse.ExternalLinks
     // De-duplicate and trim count to avoid long runs
@@ -165,6 +188,7 @@ func checkWayback(ctx context.Context, raw string) (bool, string, string) {
     ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
     defer cancel()
     req, _ := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+    req.Header.Set("User-Agent", "IABot-Go/0.1 (+https://github.com/comaeclipse/IABot-Go)")
     resp, err := http.DefaultClient.Do(req)
     if err != nil {
         return false, "", "request error"
@@ -190,4 +214,3 @@ func checkWayback(ctx context.Context, raw string) (bool, string, string) {
     }
     return false, "", "none"
 }
-
