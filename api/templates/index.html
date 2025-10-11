@@ -14,19 +14,53 @@
   <body>
     <header>
       <h1>{{.Title}}</h1>
-      <p class="muted">Minimal IABot-Go page served by a Vercel Go Serverless Function.</p>
+      <p class="muted">Scan an English Wikipedia page for external links and Wayback coverage.</p>
     </header>
     <main>
       <section class="card">
         <p>{{.Message}}</p>
-        <p>Next steps:</p>
-        <ul>
-          <li>Add more routes/functions under <code>api/</code></li>
-          <li>Wire DB and background workers (for non-Vercel environments)</li>
-          <li>Implement parsing and dead-link checks</li>
-        </ul>
+        <form method="GET" action="/">
+          <label for="page"><b>Wikipedia page title</b></label><br>
+          <input id="page" name="page" type="text" placeholder="Albert Einstein" style="width: 420px;" value="{{.Query}}">
+          <button type="submit">Scan</button>
+        </form>
+        {{if .Error}}
+        <p style="color:#b00;">Error: {{.Error}}</p>
+        {{end}}
       </section>
+      {{if .Results}}
+      <section style="margin-top:1rem;" class="card">
+        <h3>Results (showing up to 50 links)</h3>
+        <table style="border-collapse: collapse; width: 100%;">
+          <thead>
+            <tr>
+              <th style="text-align:left; border-bottom:1px solid #ddd; padding:6px;">URL</th>
+              <th style="text-align:left; border-bottom:1px solid #ddd; padding:6px;">Live</th>
+              <th style="text-align:left; border-bottom:1px solid #ddd; padding:6px;">Wayback</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Results}}
+            <tr>
+              <td style="vertical-align:top; padding:6px; max-width:480px;">
+                <a href="{{.URL}}" target="_blank" rel="noreferrer noopener">{{.URL}}</a>
+              </td>
+              <td style="vertical-align:top; padding:6px; white-space:nowrap;">
+                {{.LiveCode}} {{.LiveStatus}}
+              </td>
+              <td style="vertical-align:top; padding:6px;">
+                {{if .Archived}}
+                  <a href="{{.ArchiveURL}}" target="_blank" rel="noreferrer noopener">archived</a> ({{.ArchiveStatus}})
+                {{else}}
+                  not archived
+                {{end}}
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </section>
+      {{end}}
     </main>
   </body>
   </html>
-
