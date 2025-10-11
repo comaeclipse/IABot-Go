@@ -181,7 +181,7 @@ func checkLive(ctx context.Context, raw string) (int, string) {
 }
 
 func checkWayback(ctx context.Context, raw string) (bool, string, string) {
-    // Wayback “available” v2 API
+    // Wayback "available" v2 API
     v := url.Values{}
     v.Set("url", raw)
     reqURL := "https://archive.org/wayback/available?" + v.Encode()
@@ -191,10 +191,19 @@ func checkWayback(ctx context.Context, raw string) (bool, string, string) {
     req.Header.Set("User-Agent", "IABot-Go/0.1 (+https://github.com/comaeclipse/IABot-Go)")
     resp, err := http.DefaultClient.Do(req)
     if err != nil {
-        return false, "", "request error"
+        return false, "", "error: " + err.Error()
     }
     defer resp.Body.Close()
-    b, _ := io.ReadAll(resp.Body)
+    
+    if resp.StatusCode != http.StatusOK {
+        return false, "", "HTTP " + resp.Status
+    }
+    
+    b, err := io.ReadAll(resp.Body)
+    if err != nil {
+        return false, "", "read error"
+    }
+    
     var wb struct {
         ArchivedSnapshots struct {
             Closest struct {
@@ -206,11 +215,11 @@ func checkWayback(ctx context.Context, raw string) (bool, string, string) {
         } `json:"archived_snapshots"`
     }
     if err := json.Unmarshal(b, &wb); err != nil {
-        return false, "", "decode error"
+        return false, "", "decode error: " + err.Error()
     }
     c := wb.ArchivedSnapshots.Closest
     if c.Available && c.URL != "" {
         return true, c.URL, c.Status
     }
-    return false, "", "none"
+    return false, "", "not archived"
 }
