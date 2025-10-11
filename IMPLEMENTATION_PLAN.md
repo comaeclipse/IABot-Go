@@ -12,24 +12,26 @@ This document outlines a phased approach to incrementally add features from the 
 ## Phase 1: Core Link Checking Improvements
 
 ### 1.1 Better Dead/Alive Detection
-- [ ] Add proper HTTP status code interpretation (2xx=alive, 4xx/5xx=dead, with exceptions)
-- [ ] Handle redirects explicitly (follow and record final destination)
+- [x] Add proper HTTP status code interpretation (2xx=alive, 4xx/5xx=dead, with exceptions)
+- [x] Handle redirects explicitly (follow and record final destination)
 - [ ] Add soft-404 detection (page returns 200 but content indicates "not found")
-- [ ] Add DNS/TLS error handling and reporting
-- [ ] Record detailed error information (not just "unknown")
+- [x] Add DNS/TLS error handling and reporting
+- [x] Record detailed error information (not just "unknown")
 
 ### 1.2 Enhanced Archive Checking
-- [ ] Query Wayback with `statuscodes=200,203,206` parameter (only accept good snapshots)
-- [ ] Parse and validate archive timestamps (reject pre-1996 or future dates)
+- [x] Query Wayback with `statuscodes=200,203,206` parameter (only accept good snapshots)
+- [x] Parse and validate archive timestamps (reject pre-1996 or future dates)
 - [ ] Implement "closest before" and "closest after" logic for finding best snapshot
-- [ ] Detect existing archive URLs in input (don't check archives for archives)
+- [x] Detect existing archive URLs in input (don't check archives for archives)
 
 ### 1.3 Better Error Handling
-- [ ] Add timeout handling with proper error messages
-- [ ] Log request details (HTTP codes, timing, headers)
+- [x] Add timeout handling with proper error messages
+- [x] Log request details (HTTP codes, timing, headers)
 - [ ] Return structured error information to UI
 
 **Priority:** HIGH - These are foundational improvements to core functionality
+
+**Status:** MOSTLY COMPLETE (7/10 items done - soft-404 detection, closest before/after, and structured error UI remain)
 
 ---
 
