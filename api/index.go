@@ -326,8 +326,9 @@ func checkWayback(ctx context.Context, raw string) (bool, string, string) {
     // Wayback "available" v2 API
     v := url.Values{}
     v.Set("url", raw)
-    // Only accept snapshots with good status codes (200 OK, 203 Non-Authoritative, 206 Partial Content)
-    v.Set("statuscodes", "200,203,206")
+    // TODO: Investigate correct format for statuscodes parameter - comma-separated breaks API
+    // The official IABot uses this, but our tests show it returns empty results
+    // v.Set("statuscodes", "200,203,206")
     reqURL := "https://archive.org/wayback/available?" + v.Encode()
     ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
     defer cancel()
@@ -379,6 +380,12 @@ func checkWayback(ctx context.Context, raw string) (bool, string, string) {
         if !isValidArchiveTimestamp(c.Timestamp) {
             log.Printf("[WAYBACK] Invalid timestamp for %s: %s (rejected)", raw, c.Timestamp)
             return false, "", "invalid archive timestamp"
+        }
+        // Filter by status code - only accept good snapshots (200, 203, 206)
+        // Do this server-side since the API parameter doesn't work as expected
+        if c.Status != "200" && c.Status != "203" && c.Status != "206" {
+            log.Printf("[WAYBACK] Bad snapshot status for %s: %s (rejected, only accepting 200/203/206)", raw, c.Status)
+            return false, "", fmt.Sprintf("snapshot has bad status: %s", c.Status)
         }
         log.Printf("[WAYBACK] Found archive for %s: %s (status: %s)", raw, c.URL, c.Status)
         return true, c.URL, c.Status
