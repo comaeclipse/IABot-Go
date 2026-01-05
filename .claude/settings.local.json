@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:archive.org)",
+      "WebFetch(domain:katharinabrunner.de)",
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:foxrow.com)",
+      "WebFetch(domain:palewi.re)",
+      "WebFetch(domain:en.wikipedia.org)",
+      "WebFetch(domain:web.archive.org)",
+      "WebFetch(domain:www.mediawiki.org)",
+      "Bash(go build:*)",
+      "Bash(go run:*)",
+      "Bash(curl:*)",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "mcp__plugin_playwright_playwright__browser_snapshot",
+      "Bash(findstr:*)",
+      "mcp__plugin_playwright_playwright__browser_click",
+      "mcp__plugin_playwright_playwright__browser_close",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git rm:*)",
+      "Bash(git checkout:*)",
+      "Bash(git restore:*)",
+      "Bash(git merge:*)",
+      "Bash(git branch:*)",
+      "Bash(cat:*)"
+    ]
+  }
+}
