@@ -1,20 +1,25 @@
 package main
 
 import (
-    "log"
-    "net/http"
+	"log"
+	"net/http"
 
-    "example.com/iabot-go/internal/web"
+	handler "example.com/iabot-go/api"
 )
 
 func main() {
-    mux := http.NewServeMux()
-    mux.HandleFunc("/", web.IndexHandler)
+	mux := http.NewServeMux()
 
-    addr := ":8081"
-    log.Printf("IABot-Go web listening on %s", addr)
-    if err := http.ListenAndServe(addr, mux); err != nil {
-        log.Fatal(err)
-    }
+	// Main page handler
+	mux.HandleFunc("/", handler.Handler)
+
+	// SPN API endpoints
+	mux.HandleFunc("/api/spn/submit", handler.SPNSubmitHandler)
+	mux.HandleFunc("/api/spn/status", handler.SPNStatusHandler)
+
+	addr := ":8081"
+	log.Printf("IABot-Go web listening on %s", addr)
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		log.Fatal(err)
+	}
 }
-

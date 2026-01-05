@@ -7,8 +7,45 @@
     <style>
       body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; }
       header { margin-bottom: 1rem; }
-      .card { border: 1px solid #e3e3e3; border-radius: 8px; padding: 1rem; max-width: 720px; }
+      .card { border: 1px solid #e3e3e3; border-radius: 8px; padding: 1rem; max-width: 900px; }
       .muted { color: #666; }
+      .view-toggle { margin-bottom: 1rem; }
+      .view-toggle a { padding: 4px 12px; text-decoration: none; border: 1px solid #ccc; border-radius: 4px; margin-right: 4px; }
+      .view-toggle a.active { background: #0066cc; color: white; border-color: #0066cc; }
+      .view-toggle a:hover { background: #e0e0e0; }
+      .view-toggle a.active:hover { background: #0055aa; }
+      .citation-nums { color: #666; font-size: 0.9em; white-space: nowrap; }
+      .spn-btn {
+        padding: 2px 8px;
+        font-size: 12px;
+        cursor: pointer;
+        background: #0066cc;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        margin-left: 4px;
+      }
+      .spn-btn:hover { background: #0055aa; }
+      .spn-btn:disabled { background: #ccc; cursor: not-allowed; }
+      .spn-pending { color: #f90; font-size: 12px; }
+      .spn-success { color: #090; font-size: 12px; }
+      .spn-error { color: #c00; font-size: 12px; }
+      .credentials-form {
+        margin-bottom: 1rem;
+        padding: 1rem;
+        background: #f9f9f9;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+      }
+      .credentials-form h4 { margin: 0 0 0.5rem 0; }
+      .credentials-form input { margin-right: 8px; padding: 4px 8px; }
+      .credentials-form button { padding: 4px 12px; }
+      .creds-saved { color: #090; font-size: 12px; margin-left: 8px; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { text-align: left; border-bottom: 1px solid #ddd; padding: 6px; vertical-align: top; }
+      th { background: #f5f5f5; }
+      .url-cell { max-width: 400px; word-break: break-all; }
+      .url-cell a { color: #0066cc; }
     </style>
   </head>
   <body>
@@ -22,45 +59,232 @@
         <form method="GET" action="/">
           <label for="page"><b>Wikipedia page title</b></label><br>
           <input id="page" name="page" type="text" placeholder="Albert Einstein" style="width: 420px;" value="{{.Query}}">
+          <input type="hidden" name="view" value="{{.ViewMode}}">
           <button type="submit">Scan</button>
         </form>
         {{if .Error}}
         <p style="color:#b00;">Error: {{.Error}}</p>
         {{end}}
       </section>
+
       {{if .Results}}
       <section style="margin-top:1rem;" class="card">
-        <h3>Results (showing up to 50 links)</h3>
-        <table style="border-collapse: collapse; width: 100%;">
+        <!-- View Toggle -->
+        <div class="view-toggle">
+          <strong>View:</strong>
+          <a href="?page={{.Query}}&view=url" {{if eq .ViewMode "url"}}class="active"{{end}}>By URL</a>
+          <a href="?page={{.Query}}&view=citation" {{if eq .ViewMode "citation"}}class="active"{{end}}>By Citation</a>
+        </div>
+
+        <!-- Credentials Form for Archive.org (hidden by default, shown when needed) -->
+        <div class="credentials-form" id="spn-creds" style="display:none;">
+          <h4>Archive.org Credentials (for Save Page Now)</h4>
+          <p class="muted" style="font-size:12px; margin: 0 0 8px 0;">
+            Get your S3 keys from <a href="https://archive.org/account/s3.php" target="_blank">archive.org/account/s3.php</a>
+          </p>
+          <input type="text" id="spn-access" placeholder="Access Key" style="width:180px;">
+          <input type="password" id="spn-secret" placeholder="Secret Key" style="width:180px;">
+          <button onclick="saveCredentials()">Save</button>
+          <span id="creds-status" class="creds-saved"></span>
+        </div>
+
+        {{if eq .ViewMode "citation"}}
+        <!-- Citation-First View -->
+        <h3>Citations ({{len .Citations}} with URLs)</h3>
+        <table>
           <thead>
             <tr>
-              <th style="text-align:left; border-bottom:1px solid #ddd; padding:6px;">URL</th>
-              <th style="text-align:left; border-bottom:1px solid #ddd; padding:6px;">Live</th>
-              <th style="text-align:left; border-bottom:1px solid #ddd; padding:6px;">Wayback</th>
+              <th style="width: 50px;">Ref</th>
+              <th>URL</th>
+              <th style="width: 120px;">Live</th>
+              <th style="width: 180px;">Wayback</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Citations}}
+            {{$citation := .}}
+            {{range .URLs}}
+            <tr>
+              <td class="citation-nums">[{{$citation.Number}}]</td>
+              <td class="url-cell">
+                <a href="{{.}}" target="_blank" rel="noreferrer noopener">{{.}}</a>
+              </td>
+              <td>--</td>
+              <td>--</td>
+            </tr>
+            {{end}}
+            {{end}}
+          </tbody>
+        </table>
+        <p class="muted" style="font-size: 12px; margin-top: 8px;">
+          Note: Citation view shows URLs grouped by reference number. Switch to "By URL" for live/archive status.
+        </p>
+
+        {{else}}
+        <!-- URL-First View (default) -->
+        <h3>Results ({{len .Results}} links)</h3>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 80px;">Refs</th>
+              <th>URL</th>
+              <th style="width: 120px;">Live</th>
+              <th style="width: 200px;">Wayback</th>
             </tr>
           </thead>
           <tbody>
             {{range .Results}}
             <tr>
-              <td style="vertical-align:top; padding:6px; max-width:480px;">
+              <td class="citation-nums">
+                {{range $i, $num := .CitationNumbers}}{{if $i}}, {{end}}[{{$num}}]{{end}}
+                {{if not .CitationNumbers}}-{{end}}
+              </td>
+              <td class="url-cell">
                 <a href="{{.URL}}" target="_blank" rel="noreferrer noopener">{{.URL}}</a>
               </td>
-              <td style="vertical-align:top; padding:6px; white-space:nowrap;">
+              <td style="white-space:nowrap;">
                 {{.LiveStatus}}
               </td>
-              <td style="vertical-align:top; padding:6px;">
+              <td>
                 {{if .Archived}}
                   <a href="{{.ArchiveURL}}" target="_blank" rel="noreferrer noopener">archived</a> ({{.ArchiveStatus}})
                 {{else}}
                   not archived
+                  <button class="spn-btn" onclick="archiveURL('{{.URL}}', this)" data-url="{{.URL}}">
+                    Archive
+                  </button>
+                  <span class="spn-status"></span>
                 {{end}}
               </td>
             </tr>
             {{end}}
           </tbody>
         </table>
+        {{end}}
       </section>
       {{end}}
     </main>
+
+    <script>
+    // Store credentials in sessionStorage (clears when tab closes)
+    function saveCredentials() {
+        const access = document.getElementById('spn-access').value.trim();
+        const secret = document.getElementById('spn-secret').value.trim();
+        if (access && secret) {
+            sessionStorage.setItem('spn_access', access);
+            sessionStorage.setItem('spn_secret', secret);
+            document.getElementById('creds-status').textContent = 'Saved!';
+            setTimeout(() => {
+                document.getElementById('spn-creds').style.display = 'none';
+            }, 1000);
+        } else {
+            document.getElementById('creds-status').textContent = 'Both keys required';
+            document.getElementById('creds-status').style.color = '#c00';
+        }
+    }
+
+    // Check if credentials exist
+    function hasCredentials() {
+        return sessionStorage.getItem('spn_access') && sessionStorage.getItem('spn_secret');
+    }
+
+    // Show credentials form when clicking Archive without credentials
+    function showCredentialsForm() {
+        document.getElementById('spn-creds').style.display = 'block';
+        document.getElementById('spn-access').focus();
+    }
+
+    // Submit URL to SPN API
+    async function archiveURL(url, btn) {
+        if (!hasCredentials()) {
+            showCredentialsForm();
+            return;
+        }
+
+        const statusSpan = btn.nextElementSibling;
+        btn.disabled = true;
+        btn.textContent = 'Submitting...';
+        statusSpan.className = 'spn-status spn-pending';
+        statusSpan.textContent = '';
+
+        try {
+            const resp = await fetch('/api/spn/submit', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    urls: [url],
+                    access_key: sessionStorage.getItem('spn_access'),
+                    secret_key: sessionStorage.getItem('spn_secret')
+                })
+            });
+
+            if (!resp.ok) {
+                throw new Error('HTTP ' + resp.status);
+            }
+
+            const data = await resp.json();
+            if (data.submitted && data.submitted[0]) {
+                const job = data.submitted[0];
+                if (job.status === 'pending' || job.job_id) {
+                    btn.style.display = 'none';
+                    statusSpan.className = 'spn-status spn-pending';
+                    statusSpan.textContent = 'Queued...';
+                    pollJobStatus(job.job_id, statusSpan);
+                } else if (job.status === 'error') {
+                    btn.disabled = false;
+                    btn.textContent = 'Retry';
+                    statusSpan.className = 'spn-status spn-error';
+                    statusSpan.textContent = job.error || 'Failed';
+                }
+            } else if (data.errors && data.errors.length > 0) {
+                throw new Error(data.errors[0]);
+            }
+        } catch (err) {
+            btn.disabled = false;
+            btn.textContent = 'Retry';
+            statusSpan.className = 'spn-status spn-error';
+            statusSpan.textContent = err.message;
+        }
+    }
+
+    // Poll for job completion
+    async function pollJobStatus(jobId, statusSpan) {
+        const maxAttempts = 60; // 2 minutes max
+        let attempts = 0;
+
+        const poll = async () => {
+            try {
+                const resp = await fetch('/api/spn/status?job_id=' + encodeURIComponent(jobId));
+                if (!resp.ok) {
+                    throw new Error('HTTP ' + resp.status);
+                }
+                const job = await resp.json();
+
+                if (job.status === 'success') {
+                    statusSpan.className = 'spn-status spn-success';
+                    statusSpan.textContent = 'Archived!';
+                    return;
+                } else if (job.status === 'error') {
+                    statusSpan.className = 'spn-status spn-error';
+                    statusSpan.textContent = job.error || 'Failed';
+                    return;
+                }
+
+                attempts++;
+                if (attempts < maxAttempts) {
+                    statusSpan.textContent = 'Pending (' + attempts + 's)...';
+                    setTimeout(poll, 2000);
+                } else {
+                    statusSpan.textContent = 'Timeout - check later';
+                }
+            } catch (err) {
+                statusSpan.className = 'spn-status spn-error';
+                statusSpan.textContent = 'Check failed';
+            }
+        };
+
+        poll();
+    }
+    </script>
   </body>
-  </html>
+</html>

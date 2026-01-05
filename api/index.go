@@ -19,20 +19,23 @@ import (
 var tmplFS embed.FS
 
 type pageData struct {
-    Title   string
-    Message string
-    Query   string
-    Results []linkResult
-    Error   string
+    Title     string
+    Message   string
+    Query     string
+    Results   []linkResult
+    Citations []Citation // Citations with URLs for citation-first view
+    ViewMode  string     // "url" or "citation"
+    Error     string
 }
 
 type linkResult struct {
-    URL           string
-    LiveCode      int
-    LiveStatus    string
-    Archived      bool
-    ArchiveURL    string
-    ArchiveStatus string
+    URL             string
+    LiveCode        int
+    LiveStatus      string
+    Archived        bool
+    ArchiveURL      string
+    ArchiveStatus   string
+    CitationNumbers []int // Which citations reference this URL
 }
 
 type apiError struct {
@@ -64,13 +67,22 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
     if r.Method == http.MethodGet {
         q := strings.TrimSpace(r.URL.Query().Get("page"))
+        viewMode := r.URL.Query().Get("view")
+        if viewMode == "" {
+            viewMode = "url" // Default to URL view
+        }
+        data.ViewMode = viewMode
+
         if q != "" {
             data.Query = q
-            results, err := scanPage(r.Context(), q)
+            results, citationMap, err := scanPage(r.Context(), q)
             if err != nil {
                 data.Error = err.Error()
             } else {
                 data.Results = results
+                if citationMap != nil {
+                    data.Citations = citationMap.Citations
+                }
             }
         }
     }
@@ -78,15 +90,15 @@ func Handler(w http.ResponseWriter, r *http.Request) {
     _ = t.Execute(w, data)
 }
 
-func scanPage(ctx context.Context, title string) ([]linkResult, error) {
+func scanPage(ctx context.Context, title string) ([]linkResult, *CitationMap, error) {
     log.Printf("[SCAN] Starting scan for page: %s", title)
 
-    // Fetch external links via MediaWiki API (parse.externallinks)
+    // Fetch wikitext via MediaWiki API to parse citations
     api := "https://en.wikipedia.org/w/api.php"
     v := url.Values{}
     v.Set("action", "parse")
     v.Set("page", title)
-    v.Set("prop", "externallinks")
+    v.Set("prop", "wikitext")
     v.Set("format", "json")
     // set origin to please CORS and some edge policies; harmless for server-side
     v.Set("origin", "*")
@@ -96,22 +108,24 @@ func scanPage(ctx context.Context, title string) ([]linkResult, error) {
     ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
     defer cancel()
 
-    log.Printf("[SCAN] Fetching links from MediaWiki API...")
+    log.Printf("[SCAN] Fetching wikitext from MediaWiki API...")
     req, _ := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
     req.Header.Set("User-Agent", "IABot-Go/0.1 (+https://github.com/comaeclipse/IABot-Go)")
     resp, err := http.DefaultClient.Do(req)
     if err != nil {
         log.Printf("[SCAN] Error fetching from MediaWiki API: %v", err)
-        return nil, err
+        return nil, nil, err
     }
     defer resp.Body.Close()
     body, _ := io.ReadAll(resp.Body)
     log.Printf("[SCAN] MediaWiki API response status: %d", resp.StatusCode)
 
-    // minimal JSON decode for externallinks
+    // JSON decode for wikitext
     var parsed struct {
         Parse struct {
-            ExternalLinks []string `json:"externallinks"`
+            Wikitext struct {
+                Content string `json:"*"`
+            } `json:"wikitext"`
         } `json:"parse"`
         Error any `json:"error"`
     }
@@ -120,25 +134,17 @@ func scanPage(ctx context.Context, title string) ([]linkResult, error) {
         snippet := string(body)
         if len(snippet) > 240 { snippet = snippet[:240] + "..." }
         log.Printf("[SCAN] Error decoding MediaWiki response: %v", err)
-        return nil, &apiError{msg: "mediawiki api decode", status: resp.StatusCode, payload: snippet}
+        return nil, nil, &apiError{msg: "mediawiki api decode", status: resp.StatusCode, payload: snippet}
     }
-    links := parsed.Parse.ExternalLinks
-    log.Printf("[SCAN] Found %d raw links from MediaWiki", len(links))
 
-    // De-duplicate and trim count to avoid long runs
-    uniq := make(map[string]struct{})
-    out := make([]string, 0, len(links))
-    for _, u := range links {
-        u = strings.TrimSpace(u)
-        if u == "" {
-            continue
-        }
-        if _, ok := uniq[u]; ok {
-            continue
-        }
-        uniq[u] = struct{}{}
-        out = append(out, u)
-    }
+    // Parse citations from wikitext
+    wikitext := parsed.Parse.Wikitext.Content
+    log.Printf("[SCAN] Got wikitext (%d chars), parsing citations...", len(wikitext))
+    citationMap := ParseCitations(wikitext)
+    log.Printf("[SCAN] Found %d citations with URLs, %d unique URLs", len(citationMap.Citations), len(citationMap.URLToCitation))
+
+    // Get unique URLs from citation map
+    out := citationMap.GetUniqueURLs()
     sort.Strings(out)
     if len(out) > 50 {
         log.Printf("[SCAN] Limiting to first 50 of %d unique links", len(out))
@@ -153,12 +159,15 @@ func scanPage(ctx context.Context, title string) ([]linkResult, error) {
         select {
         case <-ctx.Done():
             log.Printf("[SCAN] Context cancelled after processing %d/%d links: %v", i, len(out), ctx.Err())
-            return results, fmt.Errorf("scan cancelled after %d links: %w", i, ctx.Err())
+            return results, citationMap, fmt.Errorf("scan cancelled after %d links: %w", i, ctx.Err())
         default:
         }
 
         log.Printf("[SCAN] [%d/%d] Checking: %s", i+1, len(out), u)
-        lr := linkResult{URL: u}
+        lr := linkResult{
+            URL:             u,
+            CitationNumbers: citationMap.GetCitationNumbers(u),
+        }
 
         // Skip live/archive checks for URLs that are already archives
         if isArchiveURL(u) {
@@ -186,7 +195,7 @@ func scanPage(ctx context.Context, title string) ([]linkResult, error) {
         results = append(results, lr)
     }
     log.Printf("[SCAN] Completed scan: processed %d links", len(results))
-    return results, nil
+    return results, citationMap, nil
 }
 
 func checkLive(ctx context.Context, raw string) (int, string) {
@@ -413,8 +422,9 @@ func isValidArchiveTimestamp(timestamp string) bool {
         return false  // Too old
     }
 
-    // Reject future timestamps (with 1 day buffer for timezone issues)
-    futureLimit := time.Now().UTC().Add(24 * time.Hour)
+    // Reject future timestamps (with 7 day buffer for timezone/indexing issues)
+    // The Wayback API sometimes returns timestamps slightly ahead due to processing
+    futureLimit := time.Now().UTC().Add(7 * 24 * time.Hour)
     if t.After(futureLimit) {
         return false  // In the future
     }
